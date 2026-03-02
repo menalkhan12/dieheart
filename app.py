@@ -370,7 +370,17 @@ def not_found(error):
 def internal_error(error):
     logger.error(f"Internal error: {error}")
     return jsonify({"error": "Internal server error"}), 500
+import threading, requests, time
 
+def keep_alive():
+    while True:
+        try:
+            requests.get("https://liveagent-e6ow.onrender.com/health")
+        except:
+            pass
+        time.sleep(240)
+
+threading.Thread(target=keep_alive, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(debug=os.getenv("FLASK_ENV") == "development")
