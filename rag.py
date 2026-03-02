@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from pathlib import Path
@@ -86,8 +87,10 @@ KEYWORD_FILE_MAP = [
       "other country", "from abroad"],
      ["FOREIGN_ADMISSION.txt"]),
 
-    (["scholarship", "financial aid", "need based", "honhaar", "peef", "fee waiver"],
-     ["ADMISSION_FAQS_COMPLETE.txt", "TRANSPORT_HOSTEL_FAQS.txt"]),
+    (["scholarship", "financial aid", "need based", "honhaar", "peef", "fee waiver",
+      "merit based scholarship", "merit scholarship"],
+     ["ADMISSION_FAQS_COMPLETE.txt", "TRANSPORT_HOSTEL_FAQS.txt",
+      "IST_FULL_WEBSITE_MANUAL.txt", "ADMISSION_INFO.txt"]),
 
     (["challan", "fee submission", "last date to submit fee", "submit fee",
       "fee deadline", "challan deadline"],
@@ -226,9 +229,15 @@ def _is_end_call(q):
 
 def _is_thanks_or_compliment(query):
     q = query.lower().strip()
+    # Remove common filler before checking
+    q_clean = re.sub(r'\b(thank you|thanks|thx|ok thanks|okay thanks|thank)\b[.,!?]?\s*', '', q).strip()
     thanks = any(x in q for x in ["thank", "thanks", "thx", "ok thanks", "okay thanks"])
     compliment = any(x in q for x in ["you're good", "youre good", "great job", "well done",
                                        "you're helpful", "youre helpful", "good job", "awesome"])
+    # If there's still a real question after removing thanks phrases, don't short-circuit
+    has_question = bool(q_clean) and len(q_clean) > 4
+    if has_question:
+        return False, False
     return thanks, compliment
 
 
@@ -367,7 +376,8 @@ RULES:
 4. RESEARCH LABS: IST has Space Systems Lab, Astronomy Resource Center (16-inch telescope), NCFA (failure analysis), NCRS&GI (remote sensing). Answer from CONTEXT.
 5. FEE: Use lakh and thousand format. Give specific program fee when asked.
 6. CLOSING MERIT: Last year = 2024. Give number directly.
-7. If truly not in CONTEXT: "I don't have that information. Please provide your phone number and we will contact you."
+7. STAY ON TOPIC: Only answer what the user specifically asked. Do NOT volunteer unrelated information from context (e.g. if asked about scholarships, do NOT mention closing merit numbers).
+8. If truly not in CONTEXT: "I don't have that information. Please provide your phone number and we will contact you."
 
 CONTEXT:
 {context}"""

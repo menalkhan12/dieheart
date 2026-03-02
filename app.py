@@ -197,11 +197,19 @@ def query():
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-        if not user_text or len(user_text.strip()) < 3:
-            return jsonify({
-                "error": "Could not hear you clearly. Please speak again.",
-                "user_text": user_text or ""
-            }), 200
+        NOISE_PHRASES = {
+            "thank you", "thanks", "you're welcome", "ok", "okay",
+            "yes", "no", "hmm", "uh", "um", "uh huh", "mm hmm",
+            "bye", "hello", "hi", "hey",
+        }
+        stripped = (user_text or "").strip()
+        is_noise = (
+            not stripped
+            or len(stripped) < 5
+            or stripped.lower().rstrip(".!?,") in NOISE_PHRASES
+        )
+        if is_noise:
+            return jsonify({"ignored": True, "user_text": stripped}), 200
 
         # Phone number
         phone = detect_phone_number(user_text)
@@ -291,9 +299,27 @@ def query_stream():
 
     def generate():
         try:
-            if not user_text or len(user_text.strip()) < 3:
-                yield _sse({"type": "error", "text": "Could not hear you clearly. Please try again."})
+            stripped = user_text.strip() if user_text else ""
+
+            # Reject empty, too-short, or hallucinated STT noise
+            NOISE_PHRASES = {
+                "thank you", "thanks", "you're welcome", "ok", "okay",
+                "yes", "no", "hmm", "uh", "um", "uh huh", "mm hmm",
+                "bye", "hello", "hi", "hey",
+            }
+            if not stripped or len(stripped) < 5:
+                yield _sse({"type": "ignored"})
                 return
+            if stripped.lower().rstrip(".!?,") in NOISE_PHRASES:
+                yield _sse({"type": "ignored"})
+                return
+            # If transcript is only repeated short words (e.g. "Thank you. Thank you. Thank you.")
+            words = stripped.lower().split()
+            if len(words) <= 6 and len(set(words)) <= 3 and not any(
+                c.isalpha() for c in stripped if c not in " .,!?"
+            ):
+                # allow it through — might be legit short query
+                pass
 
             yield _sse({"type": "transcript", "text": user_text})
 
