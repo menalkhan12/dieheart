@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0d1b2e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>IST Voice Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -27,20 +29,26 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
+      min-height: 100vh;
+      min-height: 100dvh;
       background: var(--bg);
       color: var(--text);
       font-family: 'Inter', sans-serif;
       overflow-x: hidden;
       -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     /* ── Shell ── */
     .shell {
+      min-height: 100vh;
       min-height: 100dvh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 32px 16px env(safe-area-inset-bottom, 16px);
+      padding: calc(env(safe-area-inset-top, 0px) + 32px) 16px env(safe-area-inset-bottom, 16px);
       max-width: 760px;
       margin: 0 auto;
     }
@@ -210,6 +218,9 @@
     .chat-box::-webkit-scrollbar { width: 5px; }
     .chat-box::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
 
+    /* Allow selecting transcript text */
+    .chat-box, .chat-box * { -webkit-user-select: text; user-select: text; }
+
     /* Bubbles */
     .msg {
       max-width: 88%;
@@ -302,6 +313,7 @@
     @media (max-width: 400px) {
       .hero h1 { font-size: 22px; }
       .btn { font-size: 15px; padding: 14px; }
+      .chip { font-size: 10px; }
     }
   </style>
 </head>
@@ -367,12 +379,23 @@
   const useVAD    = !isIOS;
 
   function detectMimeType() {
+    // iOS: prefers MP4/AAC; Android/Desktop: prefers WebM/Opus, then OGG (Firefox), then MP4
     const candidates = isIOS
       ? ['audio/mp4','audio/aac','audio/mpeg','audio/webm;codecs=opus','audio/webm']
-      : ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg','audio/mp4'];
-    for (const m of candidates)
-      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
-    return '';
+      : [
+          'audio/webm;codecs=opus',  // Chrome Android, Desktop
+          'audio/webm',              // Chrome fallback, Samsung Internet
+          'audio/ogg;codecs=opus',    // Firefox Android, Firefox Desktop
+          'audio/ogg',               // Firefox fallback, older Firefox
+          'audio/mp4',               // Safari, older Android
+        ];
+    for (const m of candidates) {
+      try {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m))
+          return m;
+      } catch (e) {}
+    }
+    return '';  // Browser will use default
   }
 
   function mimeToExt(mime) {
@@ -382,8 +405,10 @@
     return 'webm';
   }
 
-  document.getElementById('chip-platform').textContent =
-    isIOS ? 'Platform: iOS' : isAndroid ? 'Platform: Android' : 'Platform: Desktop';
+  const isSamsung = /samsung/i.test(navigator.userAgent);
+  const isFirefox = /firefox|fxandroid/i.test(navigator.userAgent);
+  let platformLabel = isIOS ? 'iOS' : isAndroid ? (isSamsung ? 'Android (Samsung)' : isFirefox ? 'Android (Firefox)' : 'Android') : 'Desktop';
+  document.getElementById('chip-platform').textContent = 'Platform: ' + platformLabel;
 
   /* ═══════════════════════════════════════════════
      UI HELPERS
@@ -491,10 +516,9 @@
       let played = false;
       const audioEl = new Audio();
       currentAudio = audioEl;
-      if (isIOS) {
-        audioEl.setAttribute('playsinline', 'true');
-        audioEl.setAttribute('webkit-playsinline', 'true');
-      }
+      // playsinline: prevents fullscreen on iOS; helps Android WebViews too
+      audioEl.setAttribute('playsinline', 'true');
+      audioEl.setAttribute('webkit-playsinline', 'true');
       audioEl.onended = () => done(null);
       audioEl.onerror = () => done('err');
       const instantFallback = null;
@@ -576,6 +600,8 @@
     try {
       vadStream   = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       vadAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // Android/Chrome: AudioContext often starts suspended; resume on user gesture
+      if (vadAudioCtx.state === 'suspended') await vadAudioCtx.resume();
       const src   = vadAudioCtx.createMediaStreamSource(vadStream);
       vadAnalyser = vadAudioCtx.createAnalyser();
       vadAnalyser.fftSize = 256;
@@ -587,7 +613,11 @@
       vadLoop();
       setStatus('active', 'Listening — speak your question');
     } catch(err) {
-      showToast('🎙 Microphone permission required');
+      const msg = err.name === 'NotAllowedError' ? '🎙 Microphone permission denied — allow in browser settings'
+        : err.name === 'NotFoundError' ? '🎙 No microphone found'
+        : err.name === 'NotSupportedError' ? '🎙 Microphone not supported'
+        : '🎙 Could not access microphone';
+      showToast(msg);
     }
   }
 
@@ -669,7 +699,11 @@
     if (!vadStream||vadSpeaking||vadPaused) return;
     vadSpeaking=true; vadChunks=[]; vadSpeechStart=Date.now();
     const opts = mimeType ? {mimeType} : {};
-    vadRecorder = new MediaRecorder(vadStream, opts);
+    try {
+      vadRecorder = new MediaRecorder(vadStream, opts);
+    } catch (e) {
+      try { vadRecorder = new MediaRecorder(vadStream); } catch (e2) { vadSpeaking=false; showToast('Recording not supported'); return; }
+    }
     vadRecorder.ondataavailable = e => { if (e.data&&e.data.size>0) vadChunks.push(e.data); };
     vadRecorder.onstop = vadHandleStop;
     vadRecorder.start(250);
@@ -795,7 +829,9 @@
      START CALL
   ═══════════════════════════════════════════════ */
   async function startCall() {
-    // Unlock audio (browser autoplay) — same user gesture as the click
+    if (!checkCompatibility()) return;
+
+    // Unlock audio (browser autoplay) — must run in same user gesture as click
     try {
       const silent = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAABCxAAABAAgAZGF0YQAAAAA=';
       const u = new Audio(silent);
@@ -868,7 +904,11 @@
       document.getElementById('chip-codec').textContent =
         'Codec: ' + (mimeType ? mimeType.split('/')[1].split(';')[0].toUpperCase() : 'default');
       const options = mimeType ? {mimeType} : {};
-      mediaRecorder = new MediaRecorder(stream, options);
+      try {
+        mediaRecorder = new MediaRecorder(stream, options);
+      } catch (e) {
+        try { mediaRecorder = new MediaRecorder(stream); } catch (e2) { throw new Error('Recording not supported'); }
+      }
       recordingChunks=[];
       mediaRecorder.ondataavailable = e => { if (e.data&&e.data.size>0) recordingChunks.push(e.data); };
       mediaRecorder.onstop = handleRecordingStop_iOS;
@@ -878,7 +918,10 @@
       setStatus('recording', 'Recording…');
       removeStatusMsg();
     } catch(err) {
-      showToast(err.name==='NotAllowedError' ? '🎙 Microphone permission denied' : '🎙 Could not access microphone');
+      const msg = err.name === 'NotAllowedError' ? '🎙 Microphone permission denied — allow in browser settings'
+        : err.name === 'NotFoundError' ? '🎙 No microphone found'
+        : err.message || '🎙 Could not access microphone';
+      showToast(msg);
     }
   }
 
@@ -955,11 +998,26 @@
   }
 
   /* ═══════════════════════════════════════════════
-     INIT
+     INIT & COMPATIBILITY
   ═══════════════════════════════════════════════ */
+  function checkCompatibility() {
+    if (!window.isSecureContext) {
+      showToast('⚠️ Use HTTPS — mic requires secure connection');
+      return false;
+    }
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      showToast('⚠️ Microphone not supported — try Chrome, Firefox, Safari, or Edge');
+      return false;
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      showToast('⚠️ Recording not supported — try a newer browser');
+      return false;
+    }
+    return true;
+  }
+
   window.addEventListener('load', () => {
-    if (!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)
-      showToast('⚠️ Browser does not support audio recording');
+    checkCompatibility();
     setStatus('offline', 'Offline — Click Start to begin');
     document.getElementById('mic-wrap').style.display = 'none';
   });
