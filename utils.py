@@ -71,7 +71,7 @@ def get_last_user_query(session_id):
         return None
 
 
-def get_recent_turns(session_id, n=3):
+def get_recent_turns(session_id, n=8):
     """Get last n turns (user/agent pairs) for conversation continuity. Returns list of (user, agent) tuples."""
     try:
         if not os.path.exists(CALL_RECORD_FILE):

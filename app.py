@@ -10,9 +10,10 @@ from dotenv import load_dotenv
 from rag import generate_answer, initialize_rag
 from stt import transcribe_audio
 from tts import (
-    generate_tts, get_and_clear, stream_tts_chunks, get_full_audio_bytes,
+    generate_tts, get_and_clear, get_full_audio_bytes,
     _get_ios_cached, _set_ios_cached, _is_ios_generating, _wait_for_ios_cache,
     _mark_ios_generating, _clear_ios_generating,
+    set_tts_cached, get_tts_cached,
 )
 from livekit_utils import generate_livekit_token
 from utils import (
@@ -74,11 +75,12 @@ def tts_stream(token):
     if ios:
         cached = _get_ios_cached(token)
         if cached:
+            audio_bytes, mimetype = cached
             return Response(
-                cached,
-                mimetype="audio/mpeg",
+                audio_bytes,
+                mimetype=mimetype,
                 headers={
-                    "Content-Length": str(len(cached)),
+                    "Content-Length": str(len(audio_bytes)),
                     "Cache-Control": "public, max-age=3600",
                     "Accept-Ranges": "bytes",
                 }
@@ -90,15 +92,29 @@ def tts_stream(token):
         if ios and _is_ios_generating(token):
             cached = _wait_for_ios_cache(token)
             if cached:
+                audio_bytes, mimetype = cached
                 return Response(
-                    cached,
-                    mimetype="audio/mpeg",
+                    audio_bytes,
+                    mimetype=mimetype,
                     headers={
-                        "Content-Length": str(len(cached)),
+                        "Content-Length": str(len(audio_bytes)),
                         "Cache-Control": "public, max-age=3600",
                         "Accept-Ranges": "bytes",
                     }
                 )
+        # Retry / duplicate request: serve from shared cache if we generated it before
+        cached = get_tts_cached(token)
+        if cached:
+            audio_bytes, mimetype = cached
+            return Response(
+                audio_bytes,
+                mimetype=mimetype,
+                headers={
+                    "Content-Length": str(len(audio_bytes)),
+                    "Cache-Control": "public, max-age=3600",
+                    "Accept-Ranges": "bytes",
+                }
+            )
         logger.warning(f"TTS token not found: {token[:8]}")
         return Response("Token not found or expired", status=404)
 
@@ -108,14 +124,15 @@ def tts_stream(token):
         _mark_ios_generating(token)
         logger.info(f"TTS buffered mode (iOS): token {token[:8]}")
         try:
-            audio_bytes = get_full_audio_bytes(text)
+            audio_bytes, mimetype = get_full_audio_bytes(text)
             if not audio_bytes:
                 _clear_ios_generating(token)
                 return Response("TTS generation failed", status=500)
-            _set_ios_cached(token, audio_bytes)
+            _set_ios_cached(token, audio_bytes, mimetype)
+            set_tts_cached(token, audio_bytes, mimetype)
             return Response(
                 audio_bytes,
-                mimetype="audio/mpeg",
+                mimetype=mimetype,
                 headers={
                     "Content-Length": str(len(audio_bytes)),
                     "Cache-Control": "public, max-age=3600",
@@ -127,22 +144,19 @@ def tts_stream(token):
             _clear_ios_generating(token)
             return Response("TTS error", status=500)
     else:
-        # True streaming for Android/Chrome — audio starts playing immediately
-        logger.info(f"TTS streaming mode (non-iOS): token {token[:8]}")
-        def generate():
-            try:
-                for chunk in stream_tts_chunks(text):
-                    yield chunk
-            except Exception as e:
-                logger.error(f"TTS chunk error: {e}")
-
+        # Non-iOS: single chunk (Groq WAV or edge-tts MP3)
+        logger.info(f"TTS stream (non-iOS): token {token[:8]}")
+        audio_bytes, mimetype = get_full_audio_bytes(text)
+        if not audio_bytes:
+            return Response("TTS generation failed", status=500)
+        set_tts_cached(token, audio_bytes, mimetype)
         return Response(
-            stream_with_context(generate()),
-            mimetype="audio/mpeg",
+            audio_bytes,
+            mimetype=mimetype,
             headers={
-                "Cache-Control": "no-cache, no-store",
-                "X-Content-Type-Options": "nosniff",
-                "Accept-Ranges": "none",
+                "Content-Length": str(len(audio_bytes)),
+                "Cache-Control": "public, max-age=3600",
+                "Accept-Ranges": "bytes",
             }
         )
 
@@ -223,7 +237,7 @@ def query():
             return jsonify({"user_text": user_text, "response": reply, "audio_url": audio_url}), 200
 
         # RAG
-        history = get_recent_turns(session_id, n=5)
+        history = get_recent_turns(session_id, n=10)
         reply, escalated = generate_answer(user_text, conversation_history=history)
         audio_url = generate_tts(reply, session_id)
         update_call_record(session_id, user_text, reply, escalated=escalated)
@@ -309,9 +323,11 @@ def query_stream():
             }
             if not stripped or len(stripped) < 5:
                 yield _sse({"type": "ignored"})
+                yield _sse({"type": "done"})
                 return
             if stripped.lower().rstrip(".!?,") in NOISE_PHRASES:
                 yield _sse({"type": "ignored"})
+                yield _sse({"type": "done"})
                 return
 
             lower = stripped.lower()
@@ -345,6 +361,7 @@ def query_stream():
             if is_off_topic and not has_ist_context:
                 logger.warning(f"[stream] Off-topic/hallucinated STT blocked: '{stripped}'")
                 yield _sse({"type": "ignored"})
+                yield _sse({"type": "done"})
                 return
 
             yield _sse({"type": "transcript", "text": user_text})
@@ -360,21 +377,27 @@ def query_stream():
                 yield _sse({"type": "done"})
                 return
 
-            history = get_recent_turns(session_id, n=5)
-            reply, escalated = generate_answer(user_text, conversation_history=history)
-            update_call_record(session_id, user_text, reply, escalated=escalated)
-            logger.info(f"[stream] Agent reply [{session_id}]: {reply}")
-
-            sentences = _split_sentences(reply)
-            for sentence in sentences:
-                audio_url = generate_tts(sentence, session_id)
-                yield _sse({"type": "sentence", "text": sentence, "audio_url": audio_url})
+            history = get_recent_turns(session_id, n=10)
+            reply_parts = []
+            escalated = False
+            for sentence, esc in generate_answer_stream(user_text, conversation_history=history):
+                if sentence:
+                    reply_parts.append(sentence)
+                    audio_url = generate_tts(sentence, session_id)
+                    yield _sse({"type": "sentence", "text": sentence, "audio_url": audio_url})
+                if esc is not None:
+                    escalated = esc
+            full_reply = " ".join(reply_parts)
+            update_call_record(session_id, user_text, full_reply, escalated=escalated)
+            if full_reply:
+                logger.info(f"[stream] Agent reply [{session_id}]: {full_reply}")
 
             yield _sse({"type": "done"})
 
         except Exception as e:
             logger.error(f"query_stream error: {e}")
             yield _sse({"type": "error", "text": "Server error"})
+            yield _sse({"type": "done"})
 
     return Response(
         stream_with_context(generate()),

@@ -1,10 +1,10 @@
-GROQ_API_KEYS - Multiple keys for fallback when one hits rate limit
-=====================================================================
-In Render Dashboard → Environment, add:
+GROQ_API_KEYS – Multiple keys for 6–7 concurrent calls (no 429 / latency)
+==========================================================================
+In Render Dashboard → Environment, add 6–7 keys (comma-separated, no spaces):
 
-GROQ_API_KEYS=key1,key2,key3,key4,key5,key6
+GROQ_API_KEYS=key1,key2,key3,key4,key5,key6,key7
 
-(Comma-separated, no spaces. Each key is used in order; when one gets 429, the next is tried.)
-
-Or use a single key:
-GROQ_API_KEY=your_single_key
+- Each concurrent call uses a random key so load spreads across keys (works with multiple Gunicorn workers).
+- With 7 workers and 7 keys, 6–7 simultaneous calls get one worker each and one key each → minimal 429s and latency.
+- If you use a single key, set GROQ_API_KEY=your_key instead (retries on 429; more latency under load).
+- If the app runs out of memory on Render, reduce workers in Procfile (e.g. --workers 5) and scale keys accordingly.

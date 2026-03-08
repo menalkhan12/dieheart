@@ -450,49 +450,98 @@
   /* ═══════════════════════════════════════════════
      AUDIO PLAYBACK
   ═══════════════════════════════════════════════ */
-  function playAudio(url) {
+  function speakWithSpeechSynthesis(text) {
     return new Promise(resolve => {
-      const audio   = new Audio();
-      audio.preload = 'auto';
-      currentAudio  = audio;
+      if (!text || !window.speechSynthesis) { resolve(); return; }
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 0.98;
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
+      try { speechSynthesis.speak(u); } catch (e) { resolve(); }
+    });
+  }
+
+  function playAudio(item) {
+    const text = (item && item.text) || '';
+    const url = typeof item === 'string' ? item : (item && item.url);
+    if (!url && text && window.speechSynthesis) {
+      return speakWithSpeechSynthesis(text);
+    }
+    if (!url) return Promise.resolve();
+    const fullUrl = url.startsWith('http') ? url : (window.location.origin + (url.startsWith('/') ? '' : '/') + url);
+    return new Promise(resolve => {
+      const done = (err) => {
+        if (currentAudio === audioEl) currentAudio = null;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        clearTimeout(timeout);
+        if (err && text) {
+          const voices = window.speechSynthesis?.getVoices() || [];
+          const v = voices.find(x => x.lang.startsWith('en') && /female|jenny|aria|sara|zira|susan/i.test(x.name))
+            || voices.find(x => x.lang.startsWith('en'));
+          if (window.speechSynthesis && text) {
+            const u = new SpeechSynthesisUtterance(text);
+            if (v) u.voice = v;
+            u.rate = 1; u.onend = () => resolve(); u.onerror = () => resolve();
+            try { speechSynthesis.speak(u); } catch (e) { resolve(); }
+          } else resolve();
+        } else resolve();
+      };
+      const timeout = setTimeout(() => done(null), 12000);
+      let objectUrl = null;
+      let played = false;
+      const audioEl = new Audio();
+      currentAudio = audioEl;
       if (isIOS) {
-        audio.setAttribute('playsinline','true');
-        audio.setAttribute('webkit-playsinline','true');
+        audioEl.setAttribute('playsinline', 'true');
+        audioEl.setAttribute('webkit-playsinline', 'true');
       }
-      audio.onended  = () => { currentAudio = null; resolve(); };
-      audio.onerror  = () => { currentAudio = null; resolve(); };
-      audio.oncanplaythrough = () => audio.play().catch(() => { currentAudio = null; resolve(); });
-      audio.src = url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+      audioEl.onended = () => done(null);
+      audioEl.onerror = () => done('err');
+      const instantFallback = null;
+      fetch(fullUrl + (fullUrl.includes('?') ? '&' : '?') + '_t=' + Date.now(), { credentials: 'same-origin' })
+        .then(r => r.ok ? r.blob() : Promise.reject())
+        .then(blob => {
+          if (played) return;
+          if (!callActive) { done(null); return; }
+          objectUrl = URL.createObjectURL(blob);
+          audioEl.src = objectUrl;
+          audioEl.play().then(() => { if (callActive) played = true; }).catch(() => done('err'));
+        })
+        .catch(() => done('err'));
     });
   }
 
   function interruptAudio() {
     if (currentAudio) {
       currentAudio.onended = null; currentAudio.onerror = null;
-      currentAudio.pause(); currentAudio.src = '';
+      currentAudio.pause(); currentAudio.currentTime = 0; currentAudio.volume = 0;
+      currentAudio.src = ''; currentAudio.load();
       currentAudio = null;
     }
+    if (window.speechSynthesis) speechSynthesis.cancel();
   }
 
   /* ═══════════════════════════════════════════════
      AUDIO QUEUE
   ═══════════════════════════════════════════════ */
   let audioQueue = [], queuePlaying = false, queueDoneCallback = null;
+  let tapToPlayListener = null;
 
   async function drainQueue() {
     if (queuePlaying) return;
     queuePlaying = true;
     while (audioQueue.length > 0 && callActive) {
-      const url = audioQueue.shift();
-      await playAudio(url);
-      if (!currentAudio && audioQueue.length === 0) break;
+      const item = audioQueue.shift();
+      if (!callActive) break;
+      await playAudio(item);
+      if (!callActive || (!currentAudio && audioQueue.length === 0)) break;
     }
     queuePlaying = false;
     if (queueDoneCallback) { queueDoneCallback(); queueDoneCallback = null; }
   }
 
   function enqueueAudio(url) { audioQueue.push(url); drainQueue(); }
-  function clearQueue() { audioQueue = []; interruptAudio(); queuePlaying = false; }
+  function clearQueue() { audioQueue = []; interruptAudio(); queuePlaying = false; tapToPlayListener = null; }
 
   /* ═══════════════════════════════════════════════
      VAD  (Android / Desktop)
@@ -509,11 +558,11 @@
   const VAD_THRESHOLD_NORMAL   = 0.013;
   const VAD_CONFIRM_NORMAL_MS  = 350;
 
-  // Barge-in mode — stricter, needs deliberate close voice to interrupt agent
-  const VAD_THRESHOLD_BARGEIN  = 0.025;
-  const VAD_CONFIRM_BARGEIN_MS = 500;
+  // Barge-in mode — interrupt agent as soon as user speaks
+  const VAD_THRESHOLD_BARGEIN  = 0.022;
+  const VAD_CONFIRM_BARGEIN_MS = 280;
 
-  const VAD_SILENCE_MS         = 1300;
+  const VAD_SILENCE_MS         = 700;   // Faster end-of-speech detection for ~1s response
   const VAD_MIN_SPEECH_MS      = 500;  // clips shorter than this are noise, ignored
 
   function getRMS(data) {
@@ -583,12 +632,13 @@
       if (!vadSpeaking) {
         if (rms > threshold) {
           if (!vadSpeakTimer) {
-            vadSpeakTimer = setTimeout(() => {
+              vadSpeakTimer = setTimeout(() => {
               vadSpeakTimer = null;
               if (vadPaused || !vadActive || requestInFlight) return;
-              // BARGE-IN: if agent is speaking, stop it immediately
+              // BARGE-IN: stop agent audio FIRST, then start recording
               if (agentSpeaking) {
-                clearQueue();        // stop all queued audio
+                interruptAudio();    // stop playback immediately
+                clearQueue();        // clear queue, stop all queued audio
                 agentSpeaking = false;
                 queueDoneCallback = null;
               }
@@ -708,10 +758,13 @@
             vadSpeaking     = false;
             clearTimeout(vadSpeakTimer); vadSpeakTimer = null;
             setStatus('active', 'Speaking… (speak to interrupt)');
-            enqueueAudio(event.audio_url);
+            enqueueAudio({ url: event.audio_url, text: event.text });
 
           } else if (event.type === 'error') {
             showToast('⚠️ ' + event.text);
+
+          } else if (event.type === 'ignored') {
+            showToast('Couldn\'t hear clearly — try again or speak louder');
 
           } else if (event.type === 'done') {
             if (queuePlaying || audioQueue.length > 0) {
@@ -742,6 +795,14 @@
      START CALL
   ═══════════════════════════════════════════════ */
   async function startCall() {
+    // Unlock audio (browser autoplay) — same user gesture as the click
+    try {
+      const silent = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAABCxAAABAAgAZGF0YQAAAAA=';
+      const u = new Audio(silent);
+      u.volume = 0;
+      u.play().catch(function(){});
+    } catch (e) {}
+
     document.getElementById('start-btn').disabled = true;
     setStatus('thinking', 'Connecting…');
 
@@ -761,7 +822,7 @@
       if (data.greeting_audio_url) {
         agentSpeaking = true;
         setStatus('active', 'Speaking… (speak to interrupt)');
-        await playAudio(data.greeting_audio_url);
+        await playAudio({ url: data.greeting_audio_url, text: 'Hello, this is Institute of Space Technology. How can I help you today?' });
         agentSpeaking = false;
       }
 
@@ -792,7 +853,10 @@
     if (!callActive||useVAD) return;
     if (isRecording) stopRecording();
     else {
-      if (currentAudio) { interruptAudio(); showToast('Interrupted — speak your question'); }
+      if (currentAudio || audioQueue.length > 0) {
+        clearQueue();
+        showToast('Interrupted — speak your question');
+      }
       startRecording();
     }
   });
@@ -850,7 +914,7 @@
         if (data.audio_url) {
           setMicState('speaking'); setStatus('active', 'Speaking… (tap 🎙 to interrupt)');
           showStatusMsg('Speaking…');
-          await playAudio(data.audio_url);
+          await playAudio({ url: data.audio_url, text: data.response || '' });
         }
       }
     } catch(err) {
@@ -868,8 +932,11 @@
   ═══════════════════════════════════════════════ */
   async function endCall() {
     if (!callActive) return;
-    callActive=false; clearQueue();
-    agentSpeaking=false; requestInFlight=false;
+    interruptAudio();
+    clearQueue();
+    callActive=false;
+    agentSpeaking=false;
+    requestInFlight=false;
     if (useVAD) stopVAD(); else if (isRecording) stopRecording();
     document.getElementById('start-btn').disabled = false;
     document.getElementById('end-btn').disabled   = true;

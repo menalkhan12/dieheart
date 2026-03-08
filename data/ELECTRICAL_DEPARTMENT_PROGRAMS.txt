@@ -1,9 +1,0 @@
-DEPARTMENT OF ELECTRICAL ENGINEERING – PROGRAMS
-
-When caller asks "what programs under electrical engineering" or "programs offered by electrical department":
-
-The Department of Electrical Engineering at IST offers ONLY these two undergraduate programs:
-1. BS Electrical Engineering
-2. BS Computer Engineering
-
-NEVER mention "Communication Systems Engineering" or "CSE" or any other program. Communication Systems is NOT a BS program at IST. State ONLY the two programs above.

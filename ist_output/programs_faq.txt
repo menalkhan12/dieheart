@@ -1,0 +1,9 @@
+IST BS Programs (exactly as per admissions):
+
+Engineering Programs: Aerospace Engineering, Avionics Engineering, Electrical Engineering, Mechanical Engineering, Metallurgy & Materials Engineering.
+
+Computing Programs: Computer Science, Artificial Intelligence, Data Science, Software Engineering, Computer Engineering.
+
+Science Programs: Space Science, Physics, Mathematics, RS&GIS (Remote Sensing and GIS), Chemistry (Nanotechnology), Biotechnology.
+
+Department-wise: Electrical Engineering department offers BS Electrical Engineering. Computing department offers BS Computer Science, BS Artificial Intelligence, BS Data Science, BS Software Engineering, BS Computer Engineering. Space Science department offers BS Space Science. Aeronautics & Astronautics offers Aerospace Engineering. Avionics Engineering department offers BS Avionics Engineering. Mechanical Engineering department offers BS Mechanical Engineering. Materials Science Engineering offers BS Metallurgy & Materials Engineering. Science programs (Space Science, Physics, Math, RS&GIS, Chemistry, Biotechnology) are under respective science departments.

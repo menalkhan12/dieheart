@@ -1,6 +1,6 @@
 import os
 import logging
-from groq_utils import get_client, num_keys, GROQ_KEYS
+from groq_utils import get_client, num_keys, get_next_key_index, GROQ_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,9 @@ def transcribe_audio(file_path):
             logger.warning(f"Audio file too small ({file_size} bytes) — skipping.")
             return ""
 
-        for key_idx in range(num_keys()):
+        first_key = get_next_key_index()
+        key_order = [first_key] + [i for i in range(num_keys()) if i != first_key]
+        for key_idx in key_order:
             try:
                 client = get_client(key_idx)
                 with open(file_path, "rb") as audio:

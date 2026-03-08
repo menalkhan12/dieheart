@@ -1,0 +1,39 @@
+IST CLOSING MERIT (LAST MERIT) – HISTORICAL DATA BY PROGRAM
+All figures are closing aggregate (last candidate admitted) for BS programs. Use only for trend discussion; do not promise exact cutoffs. When caller asks "will merit increase or decrease this year", describe the pattern from this data and say it may vary.
+
+ENGINEERING PROGRAMS (Merit = 10% Matric + 40% FSC + 50% Entry Test):
+BS Aerospace Engineering: 2019: 74.2  2020: 73.8  2021: 75.1  2022: 74.5  2023: 75.9  2024: 76.2
+BS Electrical Engineering: 2019: 73.5  2020: 73.2  2021: 74.4  2022: 74.8  2023: 75.2  2024: 75.6
+BS Mechanical Engineering: 2019: 72.8  2020: 72.5  2021: 73.9  2022: 73.6  2023: 74.1  2024: 74.4
+BS Avionics Engineering: 2019: 72.2  2020: 71.9  2021: 73.0  2022: 73.4  2023: 73.8  2024: 74.0
+BS Materials Science and Engineering: 2019: 71.5  2020: 71.2  2021: 72.4  2022: 72.8  2023: 73.0  2024: 73.2
+BS Computer Science: 2019: 76.0  2020: 75.6  2021: 76.8  2022: 76.2  2023: 77.1  2024: 77.4
+BS Data Science: 2019: 74.8  2020: 74.2  2021: 75.5  2022: 75.0  2023: 75.8  2024: 76.0
+BS Artificial Intelligence: 2019: 75.2  2020: 74.8  2021: 76.0  2022: 75.5  2023: 76.4  2024: 76.6
+BS Computer Engineering: 2023: 76.8  2024: 77.0
+BS Software Engineering: 2023: 76.5  2024: 76.8
+
+NON-ENGINEERING (Merit = 50% Matric + 50% FSC, no entry test):
+BS Space Science: 2019: 68.5  2020: 68.0  2021: 69.2  2022: 68.8  2023: 69.5  2024: 69.8
+BS Mathematics: 2019: 67.2  2020: 66.8  2021: 68.0  2022: 67.5  2023: 68.2  2024: 68.4
+BS Physics: 2019: 66.8  2020: 66.2  2021: 67.4  2022: 67.0  2023: 67.6  2024: 67.8
+BS Biotechnology: Offered for the first time this year. No previous closing merit. Say: "Biotechnology is offered for the first time this year, so there is no previous closing merit to share."
+
+TREND: Over the last 6 years, closing merit has generally been stable or slightly rising for most programs. When asked "will merit go up or down this year": Based on past years the trend has been relatively stable with a slight upward tendency; exact closing merit for the current year will be known when the merit list is published.
+
+IST ADMISSIONS – MERIT CRITERIA AND AGGREGATE CALCULATION
+For aggregate we need ONLY total Matric marks out of 1100 and total FSC marks out of 1100. NEVER ask for subject-wise marks (Mathematics, Physics, English, Urdu).
+
+1) First ask: "Which program are you applying for?" if program unclear.
+
+2) ENGINEERING programs (BS Aerospace, Electrical, Mechanical, Avionics, Materials Science, Computer Science, Data Science, AI, Computer Engineering, Software Engineering):
+   Merit = (Matric/1100 × 10) + (FSC/1100 × 40) + (EntryTest/100 × 50). Need Matric out of 1100, FSC out of 1100, Entry Test out of 100.
+   When caller gives marks: CALCULATE IMMEDIATELY. Example: 1010 matric, 960 FSC, 10 entry = (1010/1100×10)+(960/1100×40)+(10/100×50) = 9.2+34.9+5 = 49.1. Say "Your aggregate is about 49.1."
+   When caller has NOT given marks: Ask "Please tell me your Matric marks out of 1100, FSC marks out of 1100, and Entry Test marks out of 100."
+
+3) NON-ENGINEERING (BS Space Science, Mathematics, Physics, Biotechnology): NO ENTRY TEST.
+   Merit = (Matric/1100 × 50) + (FSC/1100 × 50).
+   When caller gives Matric and FSC: CALCULATE. Example: Matric 960/1100, FSC 1010/1100 = (960/1100×50)+(1010/1100×50) = 43.6+45.9 = 89.5. Say "Your aggregate is about 89.5."
+   When caller has NOT given marks: Ask "Please tell me your Matric marks out of 1100 and FSC marks out of 1100."
+
+4) Always end: "We cannot predict admission; the final merit list is published on the admission portal. Be hopeful, and check this year's merit when the merit list is displayed." Do not tell user to "check website" or "call" as the main response.

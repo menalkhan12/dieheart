@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from pathlib import Path
@@ -12,7 +13,7 @@ if env_path.exists():
                 key, value = line.split("=", 1)
                 os.environ[key.strip()] = value.strip()
 
-from groq_utils import get_client, num_keys, GROQ_KEYS
+from groq_utils import get_client, num_keys, get_next_key_index, GROQ_KEYS
 if not GROQ_KEYS:
     raise ValueError("GROQ_API_KEY or GROQ_API_KEYS not found.")
 
@@ -21,10 +22,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
-MODELS = [
-    "llama-3.1-8b-instant",
-    "llama-3.3-70b-versatile",
-]
+MODELS = ["llama-3.1-8b-instant"]  # Use only fast model for 1-2 sec response
 
 documents = []
 doc_names = []
@@ -33,97 +31,103 @@ doc_vectors = None
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
-MAX_CONTEXT_CHARS = 12000
+MAX_CONTEXT_CHARS = 8000
 
-BASELINE_FILES = ["RAG_QUICK_REF.txt", "IST_DEPARTMENTS_AND_PROGRAMS_SUMMARY.txt", "ADMISSION_INFO.txt"]
+BASELINE_FILES = ["all_content.txt", "calling_assistant_kb.json"]
 
+# All file names refer to files in ist_output folder (KB). Same rules: answer only from CONTEXT.
 KEYWORD_FILE_MAP = [
-    (["closing merit", "last merit", "last year merit", "last year closing",
-      "previous merit", "closing aggregate", "merit history", "merit 2024", "merit 2023"],
-     ["CLOSING_MERIT_HISTORY.txt", "RAG_QUICK_REF.txt"]),
+    (["closing merit", "last merit", "last year merit", "closing aggregate", "merit history", "merit 2024", "merit 2023",
+      "calculate aggregate", "calculate my aggregate", "merit formula", "will merit", "will i get admission",
+      "aggregate for", "merit criteria", "matric marks", "fsc marks", "entry test marks"],
+     ["merit_faq.txt", "all_content.txt", "calling_assistant_kb.json", "programs.csv"]),
 
-    (["fee structure", "fee of", "fees of", "fee for", "fees for", "tuition fee",
-      "semester fee", "how much fee", "fee avionics", "fee aerospace", "fee electrical",
-      "fee mechanical", "fee computer", "fee space", "fee mathematics", "fee physics",
-      "fee biotechnology", "fee materials", "fee software", "cost of", "charges",
-      "per semester", "fee per"],
-     ["FEE_STRUCTURE.txt", "RAG_QUICK_REF.txt"]),
+    (["fee structure", "fee of", "fees of", "fee for", "fees for", "tuition fee", "semester fee", "how much fee",
+      "cost of", "charges", "per semester", "fee per", "challan", "fee submission", "fee deadline",
+      "bs computer science fee", "bs avionics fee", "computer science fee", "avionics fee", "fee of bs",
+      "ms fee", "ms computer science fee", "fee of ms", "graduate fee", "phd fee"],
+     ["fee_faq.txt", "calling_assistant_kb.json", "all_content.txt", "programs.csv"]),
 
-    (["programs under", "program under", "programs offered", "programs in",
-      "offered by", "offered under", "department offer", "department programs",
-      "what programs", "which programs", "degree programs", "all programs",
-      "list of programs", "what degrees", "which degrees", "under mechanical",
-      "under electrical", "under avionics", "under aerospace", "under computing",
-      "under materials", "under space"],
-     ["IST_DEPARTMENTS_AND_PROGRAMS_SUMMARY.txt", "RAG_QUICK_REF.txt",
-      "ELECTRICAL_DEPARTMENT_PROGRAMS.txt"]),
+    (["programs under", "program under", "programs offered", "programs in", "offered by", "department programs",
+      "what programs", "which programs", "degree programs", "all programs", "list of programs",
+      "computing department", "computing programs", "undergraduate computing", "programs under computing",
+      "computing undergraduate", "bs computing", "computing degree", "electrical department", "space science department",
+      "computer electrical space science", "programs in computing", "programs in electrical"],
+     ["programs_faq.txt", "programs.csv", "all_content.txt", "calling_assistant_kb.json"]),
 
-    (["admission open", "admissions open", "when do admission", "last date",
-      "last date to apply", "admission close", "admission deadline",
-      "when to apply", "application deadline", "admission date"],
-     ["ADMISSION_DATES_AND_STATUS.txt", "ADMISSION_INFO.txt"]),
+    (["admission open", "admissions open", "when do admission", "last date", "admission close", "admission deadline",
+      "when to apply", "application deadline", "admission date", "eligible", "eligibility", "can i apply", "who can apply",
+      "pre-medical", "pre medical", "ics student", "dae", "a-level", "criteria for", "requirements for program",
+      "biotechnology", "fsc pre-engineering", "pre-engineering", "can i apply for", "apply in bs"],
+     ["eligibility_faq.txt", "programs.csv", "all_content.txt", "calling_assistant_kb.json"]),
 
-    (["calculate merit", "calculate aggregate", "my aggregate", "my merit",
-      "will i get admission", "aggregate formula", "merit formula",
-      "merit calculation", "merit for admission", "merit calculation for",
-      "regarding merit", "merit regard"],
-     ["MERIT_CRITERIA_AND_AGGREGATE.txt"]),
+    (["transport", "bus", "shuttle", "pick and drop", "route", "hostel", "accommodation", "boarding", "dorm",
+      "transport to students", "does ist offer transport", "offer transport"],
+     ["transport_faq.txt", "calling_assistant_kb.json", "all_content.txt"]),
 
-    (["transport", "bus", "shuttle", "pick and drop", "route"],
-     ["TRANSPORT_HOSTEL_FAQS.txt"]),
+    (["vice chancellor", "vc ", " vc", "who is the vc", "who is vice chancellor"],
+     ["vc_faq.txt", "faculty.csv", "contacts.csv", "calling_assistant_kb.json"]),
 
-    (["hostel", "accommodation", "boarding", "dorm", "stay on campus"],
-     ["TRANSPORT_HOSTEL_FAQS.txt", "ADMISSION_FAQS_COMPLETE.txt"]),
+    (["hod of", "head of department", "who is the hod", "who is the head of", "head of electrical",
+      "head of avionics", "head of computing", "hod of electrical", "hod of avionics"],
+     ["hod_faq.txt", "faculty.csv", "contacts.csv", "calling_assistant_kb.json"]),
 
-    (["eligible", "eligibility", "can i apply", "who can apply",
-      "pre-medical", "pre medical", "ics student", "dae", "a-level", "a level"],
-     ["PROGRAMS_ELIGIBILITY_WHATSAPP_SEATS.txt", "ADMISSION_FAQS_COMPLETE.txt"]),
+    (["harassment", "harassment policy", "sexual harassment", "complaint cell", "hcc"],
+     ["all_content.txt", "calling_assistant_kb.json"]),
 
-    (["diploma", "diplomas"],
-     ["PROGRAMS_ELIGIBILITY_WHATSAPP_SEATS.txt", "IST_DEPARTMENTS_AND_PROGRAMS_SUMMARY.txt"]),
+    (["mess", "mess facility", "cafeteria", "canteen", "food", "dining"],
+     ["all_content.txt", "calling_assistant_kb.json"]),
 
-    (["foreign", "international student", "overseas", "non-pakistani",
-      "other country", "from abroad"],
-     ["FOREIGN_ADMISSION.txt"]),
+    (["faculty", "professor", "dr.", "doctor", "lecturer", "registrar", "dean",
+      "teacher", "instructor", "contact person"],
+     ["faculty.csv", "contacts.csv", "calling_assistant_kb.json", "all_content.txt"]),
 
-    (["scholarship", "financial aid", "need based", "honhaar", "peef", "fee waiver"],
-     ["ADMISSION_FAQS_COMPLETE.txt", "TRANSPORT_HOSTEL_FAQS.txt"]),
+    (["contact", "phone", "address", "email", "how to reach", "where is ist", "location",
+      "location of ist", "where is ist located", "ist address", "ist location", "driving directions",
+      "faizabad", "islamabad highway", "cda toll"],
+     ["contacts.csv", "calling_assistant_kb.json", "all_content.txt"]),
 
-    (["challan", "fee submission", "last date to submit fee", "submit fee",
-      "fee deadline", "challan deadline"],
-     ["ANNOUNCEMENTS.txt", "FEE_STRUCTURE.txt"]),
+    (["recent events", "upcoming workshops", "upcoming events", "current workshops", "workshops at ist"],
+     ["news.csv", "programs.csv", "calling_assistant_kb.json", "all_content.txt"]),
 
-    # Research / labs
-    (["research", "lab", "labs", "laboratory", "research group", "research center",
-      "research centre", "research area", "eye vision", "space systems",
-      "astronomy resource", "ncfa", "failure analysis", "remote sensing lab",
-      "cubesat", "icube", "plasma", "gravitational", "spacecraft", "telescope",
-      "research at ist", "ist research"],
-     ["11_RESEARCH.txt", "IST_FULL_WEBSITE_MANUAL.txt", "03_ABOUT.txt"]),
+    (["timings", "timing", "office hours", "working hours", "when is ist open", "ist open", "opening hours"],
+     ["office_timings_faq.txt", "contacts.csv", "calling_assistant_kb.json", "all_content.txt"]),
 
-    # Facilities / campus life
-    (["facilit", "campus life", "gym", "sports", "cafeteria", "tuck shop",
-      "wellness", "counseling", "health", "ambulance", "library"],
-     ["06_FACILITIES.txt", "IST_FULL_WEBSITE_MANUAL.txt"]),
+    (["procedure to apply", "how to apply", "application process", "steps to apply", "apply in ist", "admission process"],
+     ["eligibility_faq.txt", "programs.csv", "calling_assistant_kb.json", "all_content.txt"]),
 
-    # About IST
-    (["about ist", "what is ist", "tell me about", "ist established",
-      "ist history", "ist location", "where is ist", "islamabad highway",
-      "ist accredited", "ist university", "space technology university"],
-     ["03_ABOUT.txt", "IST_FULL_WEBSITE_MANUAL.txt"]),
+    (["research", "lab", "labs", "laboratory", "research center", "research centres", "research centers",
+      "cubesat", "icube", "astronomy", "ncfa", "ncgsa", "national center of gis", "gis and space applications",
+      "lunar mission", "lunar", "moon mission", "icube-q", "icube qamar", "chang'e", "pakistan moon",
+      "oric", "bic", "cset", "arc", "ssl", "cisl", "wisp"],
+     ["research_centres_faq.txt", "suparco_faq.txt", "ncgsa_faq.txt", "calling_assistant_kb.json", "all_content.txt", "news.csv"]),
 
-    # Faculty / people / professors
-    (["faculty", "professor", "dr.", "doctor", "lecturer", "hod", "head of department",
-      "who is", "founder", "rector", "vice chancellor", "principal", "staff",
-      "teacher", "instructor", "phd supervisor", "supervisor"],
-     ["07_FACULTY.txt", "IST_FULL_WEBSITE_MANUAL.txt", "03_ABOUT.txt"]),
+    (["qamar ul islam", "kamarul islam", "dr qamar", "dr. qamar", "qamar islam"],
+     ["faculty.csv", "calling_assistant_kb.json", "all_content.txt"]),
 
-    # MS / PhD
-    (["ms program", "ms programs", "ms degree", "phd program", "phd degree",
-      "master program", "master degree", "graduate program", "postgraduate",
-      "ms admission", "phd admission", "ms fee", "phd fee", "master"],
-     ["IST_DEPARTMENTS_AND_PROGRAMS_SUMMARY.txt", "FEE_STRUCTURE.txt",
-      "IST_FULL_WEBSITE_MANUAL.txt"]),
+    (["director of", "who is the director", "ncfa director", "failure analysis director",
+      "national center for failure", "director ncfa", "head of ncfa", "who heads ncfa",
+      "founder of ncfa", "when was ncfa founded", "ncfa founded", "ncfa established",
+      "founder of ncga", "founder of ncgsa", "ncga founder", "ncgsa founder"],
+     ["ncfa_director.txt", "ncgsa_faq.txt", "calling_assistant_kb.json", "all_content.txt"]),
+
+    (["about ist", "what is ist", "tell me about", "ist established", "ist history", "vision", "mission"],
+     ["all_content.txt", "calling_assistant_kb.json"]),
+
+    (["campus life", "facilities", "gym", "sports", "cafeteria", "wellness", "counseling", "health"],
+     ["all_content.txt", "calling_assistant_kb.json"]),
+
+    (["news", "events", "convocation", "workshop", "conference", "icast", "iceast", "job fair"],
+     ["news.csv", "programs.csv", "all_content.txt", "calling_assistant_kb.json"]),
+
+    (["quality assessment", "quality assessments", "qec", "assessment 2012", "program teams 2012", "quality 2012"],
+     ["quality_2012_faq.txt", "all_content.txt", "news.csv", "programs.csv"]),
+
+    (["scholarship", "financial aid", "foreign", "international student", "ms program", "phd program", "master"],
+     ["all_content.txt", "calling_assistant_kb.json", "programs.csv"]),
+
+    (["sparco", "suparco", "space agency", "pakistan space"],
+     ["suparco_faq.txt", "all_content.txt", "calling_assistant_kb.json"]),
 ]
 
 
@@ -155,14 +159,14 @@ def _chunk_text(text, max_len=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
 
 def load_documents():
     global documents, doc_names
-    data_folder = "data"
+    data_folder = "ist_output"
     if not os.path.exists(data_folder):
-        os.makedirs(data_folder)
+        logger.warning(f"KB folder not found: {data_folder}")
         return
     documents = []
     doc_names = []
     try:
-        for file in os.listdir(data_folder):
+        for file in sorted(os.listdir(data_folder)):
             file_path = os.path.join(data_folder, file)
             if not os.path.isfile(file_path):
                 continue
@@ -177,11 +181,22 @@ def load_documents():
                                     doc_names.append(file)
                             logger.info(f"Loaded: {file}")
                 elif file.endswith(".json"):
+                    if file.lower() == "raw_api_data.json":
+                        continue
                     with open(file_path, "r", encoding="utf-8") as f:
                         json_data = json.load(f)
                         content = json.dumps(json_data, indent=2)
                         if content.strip():
                             for chunk in _chunk_text(content, max_len=1200):
+                                if chunk:
+                                    documents.append(chunk)
+                                    doc_names.append(file)
+                            logger.info(f"Loaded: {file}")
+                elif file.endswith(".csv"):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        if content.strip():
+                            for chunk in _chunk_text(content, max_len=1000):
                                 if chunk:
                                     documents.append(chunk)
                                     doc_names.append(file)
@@ -212,9 +227,11 @@ def initialize_rag():
 def _fix_stt_errors(text):
     replacements = {
         "mephee": "fee", "mifi": "fee", "mefi": "fee",
-        "harassment": "hostel", "hostile": "hostel", "hotel": "hostel",
+        "hostile": "hostel", "hotel": "hostel",
         "isp ": "IST ", "isd ": "IST ", "i.s.t": "IST",
-        "iesp": "IST", "i.e.s.p": "IST",
+        "iesp": "IST", "i.e.s.p": "IST", " isp ": " IST ", " in isp": " in IST",
+        "metric ": "matric ", " metric": " matric",
+        "kamarul islam": "qamar ul islam", "kamar ul islam": "qamar ul islam",
     }
     lower = text.lower()
     for wrong, correct in replacements.items():
@@ -273,13 +290,31 @@ def _get_forced_files_for_query(query_lower):
     return forced
 
 
+def _strip_urls(text: str) -> str:
+    """Remove URLs from reply so we never speak them over the phone."""
+    if not text or not text.strip():
+        return text
+    # Remove http(s) and plain ist.edu.pk links; keep surrounding punctuation/space sane
+    out = re.sub(r'https?://[^\s\]\)\}]+', '', text, flags=re.IGNORECASE)
+    out = re.sub(r'\bist\.edu\.pk[^\s\]\)\}]*', '', out, flags=re.IGNORECASE)
+    out = re.sub(r'\s+\s+', ' ', out).strip()
+    return out if out else text.strip()
+
+
 def _get_chunks_from_files(filenames):
+    """Build context from requested files. Iterate in filenames order so priority files (e.g. faculty.csv) get in first."""
     file_set = set(filenames)
+    # Collect (doc_names idx, chunk) for each requested file, in the order files were requested
+    by_file = {f: [] for f in filenames if f in file_set}
+    for idx, name in enumerate(doc_names):
+        if name in file_set and name in by_file:
+            by_file[name].append((idx, f"[{name}]\n{documents[idx]}"))
     parts = []
     total = 0
-    for idx, name in enumerate(doc_names):
-        if name in file_set:
-            chunk = f"[{name}]\n{documents[idx]}"
+    for f in filenames:
+        if f not in by_file:
+            continue
+        for idx, chunk in by_file[f]:
             if total + len(chunk) <= MAX_CONTEXT_CHARS - 1000:
                 parts.append(chunk)
                 total += len(chunk)
@@ -300,7 +335,7 @@ def _expand_query_for_retrieval(query):
     return query
 
 
-def retrieve_context(query, top_k=12):
+def retrieve_context(query, top_k=5):
     global vectorizer, doc_vectors
     if vectorizer is None or doc_vectors is None:
         return ""
@@ -361,7 +396,8 @@ def generate_answer(query, conversation_history=None):
         hist_str = "\n".join([f"User: {u}\nAgent: {a}" for u, a in conversation_history])
         user_message = f"Previous conversation:\n{hist_str}\n\nCurrent query: {query}"
         last_user, last_agent = conversation_history[-1] if conversation_history else ("", "")
-        if any(w in query.lower() for w in ["its", "their", "them", "they", "that", "those", "it", "this", "same"]):
+        # Only merge previous turn into retrieval when query clearly references it (e.g. "what about that?", "same for X")
+        if any(w in query.lower() for w in ["that", "those", "same", "also", "too", "what about"]):
             retrieval_query = f"{query} {last_user} {last_agent}"
 
     context = retrieve_context(retrieval_query)
@@ -374,35 +410,49 @@ def generate_answer(query, conversation_history=None):
     system_prompt = f"""You are the official voice assistant for Institute of Space Technology (IST). You answer callers by phone.
 
 CRITICAL RULES — FOLLOW EXACTLY:
-1. You can ONLY use information that appears directly in the CONTEXT section below.
+0. NO HALLUCINATION: You MUST only state facts that appear WORD-FOR-WORD or explicitly in CONTEXT. NEVER invent, assume, or add: phone numbers, routes, program names, fees, names, or any detail. If CONTEXT does not mention it, do NOT say it. If asked for routes or a phone number and CONTEXT has none, say you don't have that. Be strict.
+1. You can ONLY use information that appears directly in the CONTEXT section below. The CONTEXT is the complete knowledge base (KB) for IST.
 2. If the answer is not clearly and explicitly present in CONTEXT, reply EXACTLY with this sentence and nothing else:
    "I don't have that information. Please provide your phone number and we will contact you."
 3. Never explain, never apologize, never say "I'm not sure", never add general knowledge, never say "check website".
-4. Never answer questions about topics not in CONTEXT (planets, general science, history, etc.) — use the exact escalation sentence.
-5. Keep answers to maximum 2 very short sentences. Be concise for phone.
-
-AUTHORITATIVE PROGRAMS BY DEPARTMENT:
-- Aeronautics and Astronautics: BS Aerospace Engineering only
-- Avionics Engineering: BS Avionics Engineering only
-- Electrical Engineering: BS Electrical Engineering and BS Computer Engineering (ONLY these two)
-- Mechanical Engineering: BS Mechanical Engineering (ONLY this one)
-- Materials Science and Engineering: BS Materials Science and Engineering and BS Biotechnology
-- Space Science: BS Space Science and BS Physics
-- Computing: BS Computer Science, BS Software Engineering, BS Data Science, BS Artificial Intelligence
-- Applied Mathematics and Statistics: BS Mathematics only
-- MS programs: Aerospace, Electrical, Materials, Mechanical, Computer Science, Mathematics, Physics, Astronomy
-- PhD programs: Aerospace, Electrical, Materials, Mathematics, Physics, Astronomy
-
-ADDITIONAL RULES:
-- DIPLOMA: IST does NOT offer diplomas. IST accepts DAE holders as applicants only.
-- FEE: Use lakh and thousand format. Give specific program fee when asked.
-- CLOSING MERIT: Last year = 2024. Give number directly.
-- STAY ON TOPIC: Only answer what the user specifically asked. Do not volunteer unrelated info.
+4. Never answer questions about topics not in CONTEXT — use the exact escalation sentence.
+5. For ELIGIBILITY queries (e.g. "eligibility for X", "who can apply", "criteria for program"): Give the COMPLETE eligibility/criteria from CONTEXT. Do NOT shorten; provide the full info so the caller hears everything.
+6. For all other answers: Keep to maximum 2 very short sentences unless CONTEXT clearly has more detail to share. Be concise for phone.
+7. Use amounts in lakh and thousand when CONTEXT gives numbers. Stay on topic; only answer what the user asked.
+8. For "who is the VC/vice chancellor/HOD/head of [department]": Match the EXACT department the user asked for. If they ask "HOD of Electrical", answer ONLY the person for Electrical Engineering, NOT Computing or any other department. If CONTEXT lists multiple departments (e.g. Electrical: Dr. Adnan Zafar, Avionics: Dr. Israr Hussain, Computing: Khurram Khurshid), pick the one that matches the user's department name. Do not say you don't have the information if CONTEXT lists that person.
+   VICE CHANCELLOR of IST: The ONLY correct answer is Dr. Syed Najeeb Ahmad (Maj Gen Dr. Syed Najeeb Ahmad Retd). NEVER say "Dr. Raza ibn Abubakr" or any other name for VC — that is wrong.
+9. NEVER include, say, or read aloud any URL (http, https, ist.edu.pk, or any web link). Your reply is spoken over the phone — give only factual content: program names, numbers, descriptions. If CONTEXT contains both program names and URLs, list ONLY the program names (e.g. Computer Science, Artificial Intelligence, Data Science, Software Engineering, Computer Engineering). Do not mention or read any link.
+10. For "who is the director of [center/unit name]" (e.g. NCFA, National Center for Failure Analysis): If CONTEXT lists "The Team" or a name with title "Director" for that center, answer with that name and "Director" from CONTEXT. Do not say you don't have the information if CONTEXT lists that person.
+11. For FEE queries (fee structure, fee of X program, tuition, cost, how much): If CONTEXT contains "Fee Structure" or "Tuition Fee" with amounts in Pak Rs or rupees, state them clearly. BS programs use a common fee structure; give the one-time and per-semester amounts from CONTEXT. Do not say you don't have the information if CONTEXT has fee figures.
+12. For "who is the director of [center]" (e.g. NCFA): If CONTEXT lists a name followed by "Director" in a Team section (e.g. "Dr Anjum Tauqir Director"), that person is the Director — answer with that name. Do not say director is not mentioned if CONTEXT clearly lists it.
+13. For transport/bus/shuttle: ONLY say what is in CONTEXT. If CONTEXT says IST offers transport facilities after registration, charges as per contract, optional — say exactly that. NEVER add routes, phone numbers, or "call X" unless that exact number appears in CONTEXT. If caller asks for routes or a contact number and CONTEXT has none, use escalation sentence.
+14. For NCGSA: If CONTEXT has "National Center of GIS and Space Applications" or "NCGSA", answer that NCGSA is HEC's National Center of GIS and Space Applications; IST collaborates with it.
+15. For eligibility (e.g. "can I apply for BS Biotechnology with FSC pre-engineering"): If CONTEXT says Biotechnology needs "FSc in any science group with Biology, Chemistry, Physics, Mathematics, or Computer Science", FSC pre-engineering qualifies. Answer yes.
+16. For quality assessment/QEC/2012: If CONTEXT has QEC, Program Teams 2012, or assessments in 2012, summarize from CONTEXT.
+17. For MS/PhD fee (e.g. "fee of MS Computer Science"): MS and PhD programs share a common fee structure. If CONTEXT has "Fee Structure - MS & PhD" or "Tuition Fee" with Rs 80,526, use that. Do not say not explicitly mentioned if CONTEXT has MS fee figures.
+18. For SUPARCO/SPARCO: SUPARCO is Pakistan's national space agency (Pakistan Space and Upper Atmosphere Research Commission). IST collaborates with SUPARCO (e.g. ICUBE-Qamar). If user says SPARCO, they likely mean SUPARCO. Answer from CONTEXT.
+18b. NCFA (National Center for Failure Analysis): IST established it in March 2013 (as Failure Analysis Center, later upgraded to NCFA). Dr Anjum Tauqir is the Director. If asked who founded NCFA, say IST established it; no named individual founder is in CONTEXT.
+18c. NCGSA / NCGA: NCGSA is HEC's National Center of GIS and Space Applications. If asked founder of NCGSA or NCGA, CONTEXT does not list a founder — say you don't have that information, or that it is an HEC center.
+19. MERIT/AGGREGATE: Use formulas from CONTEXT. Need ONLY Matric total/1100 and FSC total/1100 (never subject-wise). Engineering: also Entry Test/100. Formula: Engineering = (Matric/1100×10)+(FSC/1100×40)+(Entry/100×50). Non-engineering = (Matric/1100×50)+(FSC/1100×50). If caller gave marks in this or previous message, CALCULATE and say "Your aggregate is about X." If not, ask for marks (Engineering: Matric, FSC, Entry; Non-eng: Matric, FSC only). End with: "Be hopeful; check this year's merit when the merit list is displayed on the portal."
+20. CLOSING MERIT: Use historical data from CONTEXT. For "will merit increase/decrease": trend has been stable/slightly rising; exact closing known when merit list published. For Biotechnology: first year, no previous closing merit. Do not promise cutoffs.
+21. PROGRAMS BY DEPARTMENT: List ONLY programs that appear in CONTEXT. Computing: Computer Science, Artificial Intelligence, Data Science, Software Engineering, Computer Engineering. Electrical: Electrical Engineering. Space Science: Space Science. Engineering: Aerospace, Avionics, Electrical, Mechanical, Metallurgy & Materials. Science: Space Science, Physics, Math, RS&GIS, Chemistry (Nanotechnology), Biotechnology. Do NOT add or remove any program. If CONTEXT lists different names, use those exact names.
+22. Answer ONLY the CURRENT question. Do not mix up topics: if asked about harassment policy, answer only harassment/HCC; if asked about mess/cafeteria, answer only dining/cafeteria from CONTEXT; if asked about hostel, answer only hostel. Never give hostel info when asked about harassment, or transport when asked about mess.
+23. HARASSMENT/SEXUAL HARASSMENT/HCC: If CONTEXT mentions Harassment Complaint Cell (HCC), zero-tolerance policy, Dr. Rahila Naz, or HEC Policy on Protection against Sexual Harassment, summarize that. Do not answer with hostel, transport, or unrelated content.
+24. MESS/CAFETERIA/CANTEEN/DINING: If CONTEXT mentions cafeteria, dining timings, canteen, cafeteria contractor, or mess facilities, answer from that. IST has cafeteria on campus, dining timings, and cafeteria services.
+25. OFFICE TIMINGS: If CONTEXT says IST is open 8 AM to 4 PM Monday to Friday, or similar office hours, state that. IST main campus and offices: 8 AM to 4 PM, Monday to Friday; closed weekends.
+26. PROCEDURE TO APPLY / HOW TO APPLY: Steps from CONTEXT: (1) Admissions announced on IST website/newspapers (BS: March/April; MS/PhD: April-May and Nov-Dec), (2) Create account at www.ist.edu.pk or eportal.ist.edu.pk, complete online form, upload documents, (3) Deposit application fee via challan at Meezan Bank/HBL, (4) Merit list displayed. Give this from CONTEXT.
+27. DR. QAMAR UL ISLAM (also Kamarul Islam): Professor, Electrical Engineering; PhD University of Surrey; specialization Satellite Communication/Space Systems; Project Director ICUBE-Q (lunar CubeSat), ICUBE-2; Editor-in-Chief Journal of Space Technology; Phone 051-9075428, qamar.islam@ist.edu.pk. Answer from CONTEXT.
+28. LUNAR MISSION / ICUBE-Q: Pakistan's lunar CubeSat ICUBE-Q (ICUBE-Qamar) onboard China's Chang'e 6 mission; launched May 2024; IST + SUPARCO + Shanghai Jiao Tong; Dr Qamar ul Islam Project Director. ICUBE-1 launched 2013. Summarize from CONTEXT.
+29. RESEARCH CENTRES / LABS: IST has ORIC, ICUBE-Q, CSET, BIC, NCFA, Astronomy Resource Center, Space Systems Lab, Cyber and Information Security Lab, AI and Computer Vision Lab, Propulsion Lab, Aerodynamics Lab, Control Systems Lab, WiSP Lab, and more. Answer from CONTEXT.
+30. LOCATION / ADDRESS: IST is at 1, Islamabad Highway, Near CDA Toll Plaza, Islamabad 44000, Pakistan. About 20 min from Islamabad and Rawalpindi. Driving directions in CONTEXT.
+31. EVENTS / WORKSHOPS: Convocation, ICAST, ICEAST, workshops (Plasma Spray, Python, Bridge the Gap, Lunar Satellite, etc.), Job Fair, TEDx. Answer from news.csv and all_content.
 
 CONTEXT:
 {context}"""
 
-    for key_idx in range(num_keys()):
+    first_key = get_next_key_index()
+    key_order = [first_key] + [i for i in range(num_keys()) if i != first_key]
+    for key_idx in key_order:
         client = get_client(key_idx)
         for model in MODELS:
             try:
@@ -413,12 +463,13 @@ CONTEXT:
                         {"role": "user", "content": user_message}
                     ],
                     temperature=0.1,
-                    max_tokens=200
+                    max_tokens=120
                 )
                 reply = response.choices[0].message.content
                 if not reply or not reply.strip():
                     continue
                 reply = reply.strip()
+                reply = _strip_urls(reply)
                 logger.info(f"LLM reply from {model}: {reply}")
                 escalated = any(p in reply.lower() for p in [
                     "technical issue", "cannot find", "unable",
@@ -438,3 +489,101 @@ CONTEXT:
 
     logger.error("All keys/models exhausted")
     return ("I'm having technical difficulties. Please provide your phone number and we will call you back.", True)
+
+
+def generate_answer_stream(query, conversation_history=None):
+    """
+    Stream LLM output sentence-by-sentence for low-latency TTS.
+    Yields (sentence, escalated) tuples. escalated is None until the final yield.
+    """
+    query = _fix_stt_errors(query)
+    q_lower = query.lower().strip()
+
+    if _is_end_call(q_lower):
+        reply = "Thank you for calling IST. Have a great day! Goodbye."
+        yield reply, False
+        return
+
+    is_thanks, is_compliment = _is_thanks_or_compliment(query)
+    if is_thanks:
+        yield "You're welcome.", False
+        return
+    if is_compliment:
+        yield "Thank you.", False
+        return
+
+    user_message = query
+    retrieval_query = query
+    if conversation_history:
+        hist_str = "\n".join([f"User: {u}\nAgent: {a}" for u, a in conversation_history])
+        user_message = f"Previous conversation:\n{hist_str}\n\nCurrent query: {query}"
+        last_user, last_agent = conversation_history[-1] if conversation_history else ("", "")
+        if any(w in query.lower() for w in ["that", "those", "same", "also", "too", "what about"]):
+            retrieval_query = f"{query} {last_user} {last_agent}"
+
+    context = retrieve_context(retrieval_query)
+
+    if not context.strip() or len(context.strip()) < 200:
+        logger.info(f"Context too weak ({len(context.strip())} chars) — escalating")
+        yield "I don't have that information. Please provide your phone number and we will contact you.", True
+        return
+
+    system_prompt = f"""You are IST voice assistant. Answer in 1-2 short sentences. Only facts from CONTEXT. No URLs.
+If not in CONTEXT: "I don't have that information. Please provide your phone number and we will contact you."
+VC: Dr. Syed Najeeb Ahmad. HOD: match exact dept (Electrical=Dr Adnan Zafar, Avionics=Dr Israr Hussain, Computing=Khurram Khurshid). Fees/transport: only from CONTEXT.
+
+CONTEXT:
+{context}"""
+
+    first_key = get_next_key_index()
+    key_order = [first_key] + [i for i in range(num_keys()) if i != first_key]
+    for key_idx in key_order:
+        client = get_client(key_idx)
+        for model in MODELS:
+            try:
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message}
+                    ],
+                    temperature=0.1,
+                    max_tokens=100,
+                    stream=True,
+                )
+                buffer = ""
+                for chunk in stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if not delta or not getattr(delta, "content", None):
+                        continue
+                    buffer += delta.content
+                    parts = re.split(r'(?<=[.!?])\s+', buffer, maxsplit=1)
+                    if len(parts) > 1:
+                        first_sent = parts[0].strip()
+                        if first_sent:
+                            yield _strip_urls(first_sent), None
+                        buffer = parts[1]
+                    elif parts[0].strip() and parts[0].strip()[-1] in ".!?":
+                        yield _strip_urls(parts[0].strip()), None
+                        buffer = ""
+
+                if buffer.strip():
+                    last = _strip_urls(buffer.strip())
+                    escalated = any(p in last.lower() for p in [
+                        "technical issue", "cannot find", "unable",
+                        "phone number", "provide your phone", "contact you"
+                    ])
+                    yield last, escalated
+                return
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "rate" in err_str or "quota" in err_str:
+                    logger.warning(f"Key {key_idx+1} rate limited on {model}, rotating key...")
+                    break
+                if "401" in err_str or "invalid" in err_str or "unauthorized" in err_str:
+                    logger.warning(f"Key {key_idx+1} invalid, rotating key...")
+                    break
+                logger.error(f"Model {model} key {key_idx+1} error: {e}")
+                continue
+
+    yield "I'm having technical difficulties. Please provide your phone number and we will call you back.", True
