@@ -1,3 +1,7 @@
+# Gevent must patch before any other imports (fixes MonkeyPatchWarning / ssl issues)
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import re
 import json

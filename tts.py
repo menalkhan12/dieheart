@@ -149,7 +149,7 @@ EDGE_RATE = "+15%"  # Faster for ~1 sec response feel; reduces pauses after dots
 
 # Thread pool for edge-tts: asyncio.run() cannot run inside gevent's event loop.
 # Run in a separate thread where we have a clean event loop.
-_edge_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="edge_tts")
+_edge_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="edge_tts")
 
 
 def _edge_tts_bytes(text: str) -> bytes:
