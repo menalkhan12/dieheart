@@ -7,7 +7,7 @@ import logging
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from dotenv import load_dotenv
 
-from rag import generate_answer, initialize_rag
+from rag import generate_answer, generate_answer_stream, initialize_rag
 from stt import transcribe_audio
 from tts import (
     generate_tts, get_and_clear, get_full_audio_bytes,
@@ -15,6 +15,7 @@ from tts import (
     _mark_ios_generating, _clear_ios_generating,
     set_tts_cached, get_tts_cached,
 )
+from groq_utils import GROQ_KEYS
 from livekit_utils import generate_livekit_token
 from utils import (
     init_call_record,
@@ -53,7 +54,12 @@ def home():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "OK"}), 200
+    ok = bool(GROQ_KEYS)
+    return jsonify({
+        "status": "OK" if ok else "degraded",
+        "groq_configured": ok,
+        "hint": None if ok else "Set GROQ_API_KEY in Render Dashboard → Environment"
+    }), 200
 
 
 # ── TTS Stream endpoint ────────────────────────────────────────────────────
@@ -163,6 +169,8 @@ def tts_stream(token):
 
 @app.route("/api/start_call", methods=["POST"])
 def start_call():
+    if not GROQ_KEYS:
+        return jsonify({"error": "GROQ_API_KEY not set. Add it in Render Dashboard → Environment."}), 503
     try:
         session_id = str(uuid.uuid4())
         room_name = f"room_{session_id}"
